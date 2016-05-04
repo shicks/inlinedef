@@ -1,0 +1,7 @@
+*.aux
+*.glo
+*.idx
+*.log
+inlinedef.pdf
+inlinedef.sty
+inlinetest.tex
