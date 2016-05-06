@@ -4,7 +4,7 @@ test: inlinetest.tex
 	latex inlinetest.tex
 
 inlinetest.tex inlinedef.sty: inlinedef.dtx inlinedef.ins
-	latex inlinedef.ins
+	yes | latex inlinedef.ins
 
 inlinedef.pdf: inlinedef.dtx
 	pdflatex inlinedef.dtx

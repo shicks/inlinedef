@@ -136,6 +136,13 @@
 % Thus, the previous example becomes
 % \begin{verbatim}
 %   \Inline\def\macro{...\Expand\macro...}\end{verbatim}
+
+
+ %%%%% TODO - comment about performance, recommend
+ %%%%% \LaTeX2\epsilon's |\unexpanded| instead.
+
+
+
 %
 % \subsection{Special commands}
 % While nearly everything can be done with |\Expand| alone, we provide
@@ -354,6 +361,162 @@
 }
 %    \end{macrocode}
 % \end{macros}
+%
+% \begin{macros}{\ID@def}
+% To keep good hygeine, we would like to use \LaTeX's |\newcommand|
+% macros to ensure we never accidentally clobber anyone else's macros.
+% But we often need to use delimited arguments.  So we define |\ID@def|
+% as a replacement to |\def| that clears the control sequence through
+% |\newcommand| first.
+%    \begin{macrocode}
+\newcommand\ID@def#1{\newcommand#1{}\def#1}
+%    \end{macrocode}
+% \end{macros}
+%
+% \begin{macros}{\ID@newset,\ID@newset@eat}
+% We define a very primitive concept of a ``set'', which allows $O(1)$
+% evaluation of whether a given token is an element.  The design for
+% this is modeled off of |\newif|: sets are control sequences that
+% begin with |\is...| and provide a ``setter'' that begins with |\set...|.
+% For instsance:
+% \begin{verbatim}
+%   \ID@newset\isfoo
+%   \setfoo\bar
+%   \setfoo\baz
+%   \if\isfoo\bar\message{bar is foo}\fi
+%   \if\isfoo\qux\else\message{qux is not foo}\fi\end{verbatim}
+%    \begin{macrocode}
+\ID@def\ID@newset#1{%
+  \ID@def#1##1{%
+    0\xa\ifx\csname ID@set@\string#1\string##1\endcsname\xa0\else1\fi}%
+  \xa\ID@def\csname set\xa\ID@newset@eat\string#1\endcsname##1{%
+    \xa\let\csname ID@set@\string#1\string##1\endcsname\xa}%
+}
+\ID@def\ID@newset@eat#1is{}
+%    \end{macrocode}
+% \end{macros}
+%
+% \begin{macros}{\ID@makedef}
+% We define a number of ``define prefixes'', such as |\Inline|,
+% |\InlineSpecial|, and |\InlineExpand|, and this functionality is
+% factored out into |\ID@makedef|.  It reads tokens looking for
+% one of |\def|, |\gdef|, |\newcommand|, |\renewcommand|, or
+% |\providecommand|.  In the case of the latter three, it looks for
+% a following |*|, and for the former, allows additional prefixes
+% like |\global|, |\long|, or |\outer|.  It then provides four
+% arguments: the define command, the macro name, the parameter list,
+% and the definition block, to the provided macro (the |#1| argument
+% to |\ID@makedef|).
+%    \begin{macrocode}
+\ID@def\ID@makedef#1{%
+  \begingroup
+    \futurelet\token{\ID@makedef@finddef{#1}{}}
+}
+%    \end{macrocode}
+% \end{macros}
+%
+% \begin{macros}{\isID@def,\isID@baddef}
+% We define a set of ``define'' tokens, which we look for during
+% the first phase of making a definition.  We also define a blacklist
+% of define tokens that we refuse to use.
+%    \begin{macrocode}
+\ID@newset\isID@def
+\setID@def\def
+\setID@def\gdef
+\setID@def\newcommand
+\setID@def\renewcommand
+\setID@def\providecommand
+
+\ID@newset\isID@baddef
+\setID@baddef\edef
+\setID@baddef\xdef
+\setID@baddef\let
+%    \end{macrocode}
+% \end{macros}
+%
+% \begin{macros}{\ID@clear@fi,\ID@fi}
+% Here we set up a common structure for efficiently scanning
+% tokens.  Specifically, it allows the scanning functions to
+% run with minimal execution (i.e. no assignments).  Rather,
+% we define the macros to be series of |\if...\fi| and then
+% at the end of each branch, we write |\ID@clear@if{...}|,
+% with the argument being what we expect to show up \emph{after}
+% the last block, which is delimited with an |\ID@fi|.  This
+% is a nicer alternative to earlier versions which continually
+% redefined a |\next| macro.
+%    \begin{macrocode}
+
+\ID@def\ID@clear@fi#1#2#3\ID@fi{#2#1}
+
+
+
+\ID@def\ID@makedef@founddef#1#2#3{%
+  \futurelet\token{\ID@makedef@findcs{#1}{#2#3}}%
+}
+
+\ID@def\ID@makedef@findcs#1#2#3{%
+  \ifx\token*%
+    \ID@clear@fi{\futurelet\token{\ID@makedef@findcs{#1}{#2#3}}}%
+  \fi
+  \ifx\token\csname
+    % auto-expand the csname
+    \ID@clear@fi{%
+      \begingroup
+        \def\@temp{\futurelet\token{\ID@makedef@findcs{#1}{#2}}}%
+        \xa\xa\xa\endgroup\xa\@temp\csname}%
+  \fi
+  \ifx\token\bgroup
+    % make sure that it's just a single token
+    \xa\def\xa\@temp\xa{\@gobble#3}%
+    \ifx\@temp\empty\else
+      \PackageError{inlinedef}{Cannot define more than a single token: #3}\@ehd
+    \fi
+  \fi
+  \ID@clear@fi{\ID@makedef@findargs{#1}{#2}{#3}}\relax
+  \ID@fi
+}
+
+ % actually runs the handler!
+\ID@def\ID@makedef@findargs#1#2#3#4#{#1{#2}{#3}{#4}}
+
+
+\ID@def\ID@makedef@finddef#1#2{% #1=cb, #2=def, #3=token
+  \if\isID@def\token
+    \ID@clear@fi{\ID@makedef@founddef{#1}{#2}}%
+  \fi
+  \if\isID@baddef\token
+    \PackageError{inlinedef}{Cannot use fully-expanding defines.}\@ehd
+    \ID@clear@fi{\ID@gobbledef}%
+  \fi
+  \ifx\token\bgroup
+    \PackageError{inlinedef}{No \protect\def\space found.}\@ehd
+    \ID@clear@fi{\ID@gobbledef}%
+  \ifcat\noexpand\@foo\space
+    %%% TODO - how to unspace when we've already gobbled it?!?
+    %%%  -> don't gobble, but then how to ensure it remains?
+
+    %%%%%%% -> why do I care about this space?!? it's not in a delimiter.
+
+    \def\@temp@a{\ID@makedef@finddef{#1}}
+    \def\@temp@b{#2}
+    \xa\xa\xa\xa\xa\xa\xa\def\xa\xa\xa\xa\xa\xa\xa\@temp\xa\xa\xa\xa\xa\xa\xa
+        {\xa\xa\xa\@tempa\xa\xa\xa{\xa\@tempb\space}}%
+    \xa\ID@clear@fi\xa{\xa\@temp\xa}\ID@unspace
+    \xa\xa\xa\xa\xa\xa\xa\ID@clear@fi\xa\xa\xa\xa\xa\xa\xa{\xa\xa\xa
+      \@temp@a\xa\xa\xa{\xa\@temp@b\space}\
+    \def\next{\ID@toks\xa\xa\xa{\xa\the\xa\ID@toks\space}%
+      \xa\futurelet\xa\@foo\xa\ID@scandef\ID@unspace}% copied from ID@space
+  \fi
+  \ID@clear@fi{\futurelet\ID@makedef@finddef{#1}{#2#3}}\relax
+  \ID@fi
+}
+
+
+
+
+
+
+
 %
 % \begin{macros}{\ID@sd@checkagain,\ID@sd@lastcheck}
 % These just get the scandef loop started again and set |\@testtrue| if we're
@@ -673,9 +836,54 @@
   \fi
   \ID@scan
 }
+
+
+
+\def\DefineInlineCommand#1#2#{\ID@defineinline#1{#2}}
+\def\ID@defineinline#1#2#3{%
+  \xa\def\xa\@temp\xa{\csname ID@\string#1\endcsname}%
+  \xa\ifx\@temp\relax\else\PackageError{inlinedef}{redefinition}\fi
+  \xa\def\csname ID@\string#1\endcsname#2{\begingroup#3\C@END}%
+  \xa\def\xa\ID@quarks\xa{\ID@quarks#1}%
+}
+
+
+\NewInlineExpansion\ExpandIf[3][debug]{\IFELSE{#1}{#2}{#3}}
+\Inline\def\foo{blah\ExpandIf[someotherflag]{abc}{def}blee}
+
+ % => \newcommand{\ID@\ExpandIf}[3][debug]{\Continue{\IFELSE{#1}{#2}{#3}}}
+
+
+\def\NewInlineExpansion#1{\begingroup\@ID@new{F}{#1}}
+\def\RenewInlineExpansion#1{\begingroup\@ID@new{T}{#1}}
+\def\ProvideInlineExpansion#1{\begingroup\@ID@new{}{#1}}
+\def\@ID@new#1#2#3#{\@@ID@new{#1}{#2}{#3}}
+\def\@@ID@new#1#2#3#4{
+  \ID@checkdefined{#1}{#2}%
+  \xa\newcommand\csname ID@\string#2\endcsname#3{%
+    \begingroup\Continue{#4}\C#END}}
+
+
+
+\DefineInlineCommand\NoExpand#1{\Save{#1}}
+
+
+\DefineInlineCommand\Super{%
+  \ID@checkusage\ID@checkreder{Super}%
+  \ifID@aborted\else
+    \xa\xa\xa\Save\xa\xa\xa{\xa\@reservedc\ID@fixedparams}%
+}
+
+
 \newcommand\ID@expandnext[2]{%
   \ID@toks\xa\xa\xa{\xa\the\xa\ID@toks#2}\ID@scan
 }
+
+\DefineInlineCommand\Expand#1{%
+  \xa\Save\xa{#1}%
+}
+
+
 \newcommand\ID@expandmulti[3]{%
   \begingroup % #1 is the \MultiExpand...
     \ID@count#2\relax % this will need to be allocated too!
@@ -687,6 +895,26 @@
     }%
   \xa\endgroup\xa\ID@toks\xa\xa\xa{\xa\the\xa\ID@toks\the\ID@toks}\ID@scan
 }
+
+\DefineInlineCommand\ExpandMulti#1#2{%
+  \ifnum#1>\@ne
+  \count@#1\relax
+  \advance#1\m@ne
+  \xa\xa\xa\Continue\xa\xa\xa{\xa\xa\xa\ExpandMulti\xa\xa\xa{\xa\the\xa\count@\xa}\xa{#2}}%
+}
+
+\DefineInlineCommand\ExpandFully#1{\edef\@temp{#1}\xa\Save\xa{\@temp}}
+
+\DefineInlineCommand\ExpandUnsafe{\expandafter}
+
+
+\InlineSpecial\def\ExpandFully#1{...}
+\InlineSpecial\newcommand\foo[2][1]
+
+\InlineExpand\def\ExpandIfT#1#2{...}
+
+\Inline\newcommand... - could this work?
+
 
 \newcommand*\ID@expandunsafe[1]{\expandafter\ID@scan}
 \newcommand*\ID@expandmacro[1]{\expandafter\ID@scan\@reservedc}
@@ -878,6 +1106,39 @@
 
 \Inline\def\a{\Expand{\expandafter a\the\toks0}c\Expand{\the\toks1e}}
 \CheckDefinition\a{abcde}
+
+\NewInlineCommand\ExpandIf#1#2{
+  
+}
+
+ %       i. Tricky expansions
+ %\def\x{\ifflag}
+ %\edef\xx{\expandafter\string\x}
+ %\show\xx
+ %%% idea: \Expand\iffoo
+ %%%   - use same trick as \newif (i.e. \xa\def\@if#1{true}{...}
+ %%%     where \@if#1#2 -> \csname\xa\if@\string#1#2\endcsname.
+ %%%           \if@ if -> .
+ %%%   - optionally remove the if (or maybe use futurelets to pick off
+ %%%     one at a time -> \ID@is@an@if#1
+ %%%   - if so then evaluate the if in a controlled setting, then
+ %%%     gather everything into token register until we find a BALANCED
+ %%%     \else and/or \fi.  The balanced part is tricky... and then we
+ %%%     end up with weird behavior because the \fi is already gobbled
+ %%%     when it wouldn't normally be, so attempts to \xa it will be
+ %%%     surprising.
+ %%% instead:
+ %%%   \ExpandIf{foo}{...}?\Else{...}?
+ %%%   \ExpandIf{foo}{...}?\Else{...}?
+ %%%   \ExpandIf\foo{...}?\Else{...}?
+
+
+\newif\ifflag
+\Inline\def\a{a\MultiExpand2{\ifflag b\else c\fi}d}
+\CheckDefinition\a{acd}
+\flagtrue
+ %\Inline\def\a{a\Expand{\ifflag b\else c\fi}d}
+ %\CheckDefinition\a{abd}
 
  %    C. MultiExpand
 \def\x{\y}
