@@ -28,14 +28,6 @@
 % Run LaTeX on the .ins file to produce the package.
 %<*driver>
 \ProvidesFile{inlinedef.dtx}
-%</driver>
-%
-%<package>\NeedsTeXFormat{LaTeX2e}
-%<package>\ProvidesPackage{inlinedef}%
-%<testsuite>\documentclass{minimal}
-%<testsuite>\usepackage{inlinedef}%
-           [2008/07/10 v1.0 Inlined expansions within definitions]
-%<*driver>
 \documentclass{ltxdoc}
 \CheckSum{1876}
 %\OnlyDescription % (un)comment this line to show (hide) source code
@@ -57,6 +49,7 @@
     \endmacro\let\mac@next\@endmacros
     \global\advance\mac@depth\m@ne\fi\mac@next}
   \newenvironment{macros}[1]{\@macros#1,&}{\@endmacros}
+  \newenvironment{params}{\par Parameters:\catcode`*13\def*{\\\qquad}}{}
   \catcode`&4  %% put it back
   % Stop indexing at a certain point
   \newcommand\StopIndexing{\let\special@index\@gobble}
@@ -64,7 +57,7 @@
   \makeatother %% must be balanced for character table to work properly
   %
   % Don't index unimportant names...
-  \DoNotIndex{\@ne,\@whilesw,\@gobble,\@eha,\@ehd,\@empty,\xa}
+  \DoNotIndex{\@ne,\@whilesw,\@gobble,\@eha,\@ehd,\@empty,\@xa}
   \DoNotIndex{\advance,\begin,\begingroup,\xdef}
   \DoNotIndex{\catcode,\DeclareRobustCommand,\def,\detokenize,\edef}
   \DoNotIndex{\end,\endgroup,\errorcontextlines,\expandafter,\foo}
@@ -174,7 +167,7 @@
 %   \item\DescribeMacro\NoExpand|\NoExpand| - If a token is preceeded
 %     by |\NoExpand| then it is inserted in the definition exactly as-is.
 %     This is required to insert any of the special tokens |\Expand|,
-%     |\NoExpand|, etc, as well as the internal token |\Q@END|, into a
+%     |\NoExpand|, etc, as well as the internal token |\ID@END|, into a
 %     definition.  If the token immediately following |\NoExpand| is
 %     an open-brace then the entire text of the group will be inserted
 %     without expansion, and the outer level of grouping will be lost.
@@ -256,16 +249,22 @@
 % \filbreak
 % \makeatletter
 % \section{Implementation}
-% \begin{macro}{\xa}
+% We start with the identity.  This package expects \LaTeX2e.
+%<*package>
+\NeedsTeXFormat{LaTeX2e}
+\ProvidesPackage{inlinedef}%
+           [2016/05/07 v1.1 Inlined expansions within definitions]
+% \begin{macro}{\@xa}
 % Make the |@|-sign into a letter for use in macro names.  As long as the
 % packages are well-behaved, we can put this here and not later.  We also
-% define |\xa| to be |\expandafter| for convenience.
+% define |\@xa| to be |\expandafter| for convenience.
 %    \begin{macrocode}
-%<*package>
 \makeatletter
-\let\xa\expandafter
+\let\@xa\expandafter
 %    \end{macrocode}
 % \end{macro}
+
+
 %
 % \begin{macros}{\ifID@aborted,\ifID@star,\ifID@starstar,\ifID@bang}
 % We define a conditional so that we can gracefully abort in case of an error.
@@ -289,9 +288,21 @@
 %    \end{macrocode}
 % \end{macros}
 %
+% \begin{macro}{\ID@quarks}
+% We use a simple macro to gather the list of ``quarks'', which are
+% tokens that expand to themselves.  These are used for the ``specials''
+% that can be used in |\Inline| definitions' bodies to break out into
+% custom expansion behavior.  This macro is simply a series of
+% |\def\foo{\foo}| statements, and is executed in a local group
+% for every call to |\Inline|.
+%    \begin{macrocode}
+\def\ID@quarks{}
+%    \end{macrocode}
+% \end{macro}
+%
 % \begin{macros}{\Inline,\ID@scandef}
 % These are the macros that get it all started.  |\Inline| opens up
-% a group (which is closed at the end of |\ID@def|) and initializes a
+% a group (which is closed at the end of |\ID@define|) and initializes a
 % toks register (we don't bother allocating it since we're in a group
 % and don't call any \LaTeX{} or \TeX{} macros that make use of allocated
 % toks registers.  Then we scan the tokens until we
@@ -300,76 +311,98 @@
 % will cause an error message, so that we don't go too far before figuring
 % out what went wrong.  Should |\Inline| be |\outer|?
 %    \begin{macrocode}
-\DeclareRobustCommand\Inline{%
+\newcommand\Inline{%
   \begingroup
-  % Define a few ``quarks''
-  \def\Expand{\Expand}\def\Super{\Super}%
-  \def\UnsafeExpand{\UnsafeExpand}\def\MultiExpand{\MultiExpand}%
-  \def\Recurse{\Recurse}\def\NoExpand{\NoExpand}%
-  \def\Q@END{\Q@END}%
-  % Define a toks register
-  \ID@toks{}%
-  % Signal that we need to look for a star
   \@testtrue\ID@starfalse\ID@starstarfalse\ID@bangfalse
-  % Start scanning for \def or \gdef
-  \futurelet\@foo\ID@scandef
+  \ID@inlinedef@initialize
 }
-\newcommand\ID@scandef{%
-  \let\next\ID@saveprefix % Default behavior
-  % If this is the first few tokens after the \Inline, check for * or !
-  \if@test
-    \ifx\@foo*%
-      \ifID@star
-        \ifID@bang\let\next\ID@sd@lastcheck\else\let\next\ID@sd@checkagain\fi
-        \ID@starstartrue
-      \else
-        \let\next\ID@sd@checkagain
-        \ID@startrue
-      \fi
+
+\def\ID@inlinedef@initialize#1{%
+  % (a) group
+  \ifcase\ID@is@group{#1}\ID@then
+    \PackageError{inlinedef}{%
+        Groups are not allowed immediately after \protect\Inline}\@ehd
+    \ID@abort
+  \fi
+  % (b) star
+  \if#1*%
+    \ifID@starstar
+      \PackageError{inlinedef}{\protect\Inline*** is illegal}\@ehd
+      \@xa\ID@then\@xa\ID@abort
     \fi
-    \ifx\@foo!%
-      \ifID@bang\else % two bangs - can this be anything but an error?
-        \ID@bangtrue
-        \xa\let\xa\next\ifID@starstar\ID@sd@lastcheck\else\ID@sd@checkagain\fi
-      \fi
+    \ifID@star
+      \ID@starstartrue
+    \else
+      \ID@startrue
     \fi
+    \ID@then\ID@inlinedef@initialize
   \fi
-  % Now look for a \def or \gdef
-  \ifx\@foo\def
-    \def\next{\ID@start\def}%
+  % (c) bang
+  \if#1!%
+    \ifID@bang
+      \PackageError{inlinedef}{\protected\Inline!! is illegal}\@ehd
+      \@xa\ID@then\@xa\ID@abort
+    \fi
+    \ID@bangtrue
+    \ID@then\ID@inlinedef@initialize
   \fi
-  \ifx\@foo\gdef
-    \def\next{\ID@start\gdef}%
+  % (d) default
+  \iftrue\ID@then
+    \ID@makedef\ID@inlinedef@start#1%
   \fi
-  \ifcat\noexpand\@foo\space
-    \def\next{\ID@toks\xa\xa\xa{\xa\the\xa\ID@toks\space}%
-      \xa\futurelet\xa\@foo\xa\ID@scandef\ID@unspace}% copied from ID@space
-  \fi
-  % Error checking (minimal)
-  \@testfalse
-  \ifx\@foo\edef\@testtrue\fi\ifx\@foo\xdef\@testtrue\fi
-  \ifx\@foo\newcommand\@testtrue\fi\ifx\@foo\renewcommand\@testtrue\fi
-  \ifx\@foo\DeclareRobustCommand\@testtrue\fi
-  \if@test\PackageError{inlinedef}{Only \protect\def\space and \protect\gdef\space are
-    allowed after \protect\Inline,\MessageBreak but some other type of
-    definition was found}\@eha\let\next\ID@abort\fi
-  \@testfalse
-  \ifx\@foo\bgroup\@testtrue\fi\ifx\@foo\let\@testtrue\fi
-  \if@test\PackageError{inlinedef}{No \protect\def\space or \protect\gdef\space found
-    after \protect\Inline}\@ehd\def\next{\ID@abort{}}\fi
-  \next
+  \ID@esac
+}
+
+\def\ID@inlinedef@start#1#2#3#4{%
+%    \end{macrocode}
+% We start by opening a group, defining all the ``quarks'', clearing
+% the token register, and then looking 
+  \begingroup\ID@quarks\ID@toks{}%
 }
 %    \end{macrocode}
-% \end{macros}
-%
-% \begin{macros}{\ID@def}
-% To keep good hygeine, we would like to use \LaTeX's |\newcommand|
-% macros to ensure we never accidentally clobber anyone else's macros.
-% But we often need to use delimited arguments.  So we define |\ID@def|
-% as a replacement to |\def| that clears the control sequence through
-% |\newcommand| first.
+% Here is where the ``main loop'' is initiated.  We start by
+% pretending to allocate another token register (though we actually
+% just |\toksdef| it), and then define a number of quarks which we
+% use as delimiters for various purposes.  Finally, we start scanning.
+% Afterwards, we test if there was an error and if not, we expand the
+% definition command \emph{after} the |\endgroup| so that we can clean
+% up all the local variables.
 %    \begin{macrocode}
-\newcommand\ID@def#1{\newcommand#1{}\def#1}
+  % Other definitions
+  \global\ID@abortedfalse
+  \let\ID@super#2%
+  % If \ID@super is undefined/relax, make it a quark instead to prevent matching
+  \ifx\ID@super\ID@UNDEFINED\def\ID@super{\ID@super}\fi
+  \ifx\ID@super\relax\def\ID@super{\ID@super}\fi
+  \def\@macroname{#1}% for error message
+  \ID@fixparams#3\ID@END
+  % These are used by \Super but easier to define here
+  \def\@reservedb#3{}%
+  \edef\@reservedb{\@xa\ID@getprefix\meaning\@reservedb\ID@END}%
+  \ifx#2\ID@UNDEFINED
+    \let\@reserveda\undefined
+
+    %%% TODO - make getprefix more permissive
+
+  \else
+    \edef\@reserveda{\@xa\ID@getprefix\meaning#1\ID@END}%
+  \fi
+  % Scan it all into \ID@toks
+  \ifID@bang\else\ID@checkusage\fi
+  \ifID@aborted\else
+    \ID@scan#4\ID@END{}% we need the {} so that the the #1# works...
+  \fi
+  %
+  \ifID@aborted
+    \def\command{}% gracefully ignore
+  \else
+    \let#2\relax % don't want it expanded in the |\edef| below
+    \edef\command{#1#2#3{\the\ID@toks}}%
+  \fi
+  %
+  \global\ID@toks\@xa{\ID@fixedparams}% just to test...
+  \expandafter\endgroup\command
+}
 %    \end{macrocode}
 % \end{macros}
 %
@@ -386,34 +419,47 @@
 %   \if\isfoo\bar\message{bar is foo}\fi
 %   \if\isfoo\qux\else\message{qux is not foo}\fi\end{verbatim}
 %    \begin{macrocode}
-\ID@def\ID@newset#1{%
-  \ID@def#1##1{%
-    0\xa\ifx\csname ID@set@\string#1\string##1\endcsname\xa0\else1\fi}%
-  \xa\ID@def\csname set\xa\ID@newset@eat\string#1\endcsname##1{%
-    \xa\let\csname ID@set@\string#1\string##1\endcsname\xa}%
+\def\ID@newset#1{%
+ %  --- note: use ifcsname to prevent leakage
+  \def#1##1{%
+    0\@xa\ifx\csname ID@set@\string#1\string##1\endcsname\@xa0\else1\fi}%
+  \@xa\def\csname set\@xa\ID@newset@eat\string#1\endcsname##1{%
+    \@xa\let\csname ID@set@\string#1\string##1\endcsname\@xa}%
 }
-\ID@def\ID@newset@eat#1is{}
+\def\ID@newset@eat#1is{}
+%    \end{macrocode}
+% \end{macros}
+
+
+
+% \begin{macros}{\ID@empty,\ID@nonempty}
+% We want a fully-expandable way to determine if an argument is
+% empty, so we use a trick from Donald Arsineau's url.sty.  We use
+% a funny catcode that should never actually show up anywhere
+% (so this will break on anything with an X$_3$).
+%    \begin{macrocode}
+{
+  \catcode`X=3
+  \long\gdef\ID@nonempty@#1#2X#3#4#5XX{#4}
+  \gdef\ID@empty[3]{\ID@nonempty@#1XX{#3}#2XX}
+}
 %    \end{macrocode}
 % \end{macros}
 %
-% \begin{macros}{\ID@makedef}
-% We define a number of ``define prefixes'', such as |\Inline|,
-% |\InlineSpecial|, and |\InlineExpand|, and this functionality is
-% factored out into |\ID@makedef|.  It reads tokens looking for
-% one of |\def|, |\gdef|, |\newcommand|, |\renewcommand|, or
-% |\providecommand|.  In the case of the latter three, it looks for
-% a following |*|, and for the former, allows additional prefixes
-% like |\global|, |\long|, or |\outer|.  It then provides four
-% arguments: the define command, the macro name, the parameter list,
-% and the definition block, to the provided macro (the |#1| argument
-% to |\ID@makedef|).
+% \begin{macros}{\ID@is@empty,\ID@is@group}
+% We also define wrappers that can be used with |\ifcase|, for
+% both ``is empty'' and ``is a group'' (anything other than a
+% single token; note that we can't actually distinguish a group
+% with a single token from a bare token in this case).
 %    \begin{macrocode}
-\ID@def\ID@makedef#1{%
-  \begingroup
-    \futurelet\token{\ID@makedef@finddef{#1}{}}
-}
+\newcommand\ID@is@empty[1]{\ID@empty{#1}01}
+\newcommand\ID@is@group[1]{\@xa\ID@empty{\@gobble#1}{\ID@empty{#1}01}0}
 %    \end{macrocode}
 % \end{macros}
+
+
+
+
 %
 % \begin{macros}{\isID@def,\isID@baddef}
 % We define a set of ``define'' tokens, which we look for during
@@ -434,169 +480,322 @@
 %    \end{macrocode}
 % \end{macros}
 %
-% \begin{macros}{\ID@clear@fi,\ID@fi}
-% Here we set up a common structure for efficiently scanning
-% tokens.  Specifically, it allows the scanning functions to
-% run with minimal execution (i.e. no assignments).  Rather,
-% we define the macros to be series of |\if...\fi| and then
-% at the end of each branch, we write |\ID@clear@if{...}|,
-% with the argument being what we expect to show up \emph{after}
-% the last block, which is delimited with an |\ID@fi|.  This
-% is a nicer alternative to earlier versions which continually
-% redefined a |\next| macro.
+% \begin{macros}{\ID@then,\ID@esac}
+% Here we set up a simple fully-expandable ``switch'' construct.
+% We will end a number of macro definitions with
+% \begin{verbatim}
+%   \iffoo  ... \ID@then ... \fi
+%   \ifbar  ... \ID@then ... \fi
+%   \iftrue\ID@then ... \fi
+%   \ID@esac
+% \end{verbatim}
+% This ensures that everything after the |\ID@then| ends up
+% \emph{after} the |\ID@esac|.  This is a nicer alternative to
+% earlier versions that continually redefined a |\next| macro.
+% Note that there \emph{must not} be any bare |\fi|s between
+% the |\ID@then| and the delimiting |\fi|: if an extra condition
+% is needed, it should be protected by a group.
 %    \begin{macrocode}
-
-\ID@def\ID@clear@fi#1#2#3\ID@fi{#2#1}
-
-
-
-\ID@def\ID@makedef@founddef#1#2#3{%
-  \futurelet\token{\ID@makedef@findcs{#1}{#2#3}}%
+\@xa\def\@xa\ID@then\@xa#1\csname fi\endcsname#2\ID@esac{%
+  \csname fi\endcsname
+  #1%
 }
-
-\ID@def\ID@makedef@findcs#1#2#3{%
-  \ifx\token*%
-    \ID@clear@fi{\futurelet\token{\ID@makedef@findcs{#1}{#2#3}}}%
-  \fi
-  \ifx\token\csname
-    % auto-expand the csname
-    \ID@clear@fi{%
-      \begingroup
-        \def\@temp{\futurelet\token{\ID@makedef@findcs{#1}{#2}}}%
-        \xa\xa\xa\endgroup\xa\@temp\csname}%
-  \fi
-  \ifx\token\bgroup
-    % make sure that it's just a single token
-    \xa\def\xa\@temp\xa{\@gobble#3}%
-    \ifx\@temp\empty\else
-      \PackageError{inlinedef}{Cannot define more than a single token: #3}\@ehd
-    \fi
-  \fi
-  \ID@clear@fi{\ID@makedef@findargs{#1}{#2}{#3}}\relax
-  \ID@fi
-}
-
- % actually runs the handler!
-\ID@def\ID@makedef@findargs#1#2#3#4#{#1{#2}{#3}{#4}}
-
-
-\ID@def\ID@makedef@finddef#1#2{% #1=cb, #2=def, #3=token
-  \if\isID@def\token
-    \ID@clear@fi{\ID@makedef@founddef{#1}{#2}}%
-  \fi
-  \if\isID@baddef\token
-    \PackageError{inlinedef}{Cannot use fully-expanding defines.}\@ehd
-    \ID@clear@fi{\ID@gobbledef}%
-  \fi
-  \ifx\token\bgroup
-    \PackageError{inlinedef}{No \protect\def\space found.}\@ehd
-    \ID@clear@fi{\ID@gobbledef}%
-  \ifcat\noexpand\@foo\space
-    %%% TODO - how to unspace when we've already gobbled it?!?
-    %%%  -> don't gobble, but then how to ensure it remains?
-
-    %%%%%%% -> why do I care about this space?!? it's not in a delimiter.
-
-    \def\@temp@a{\ID@makedef@finddef{#1}}
-    \def\@temp@b{#2}
-    \xa\xa\xa\xa\xa\xa\xa\def\xa\xa\xa\xa\xa\xa\xa\@temp\xa\xa\xa\xa\xa\xa\xa
-        {\xa\xa\xa\@tempa\xa\xa\xa{\xa\@tempb\space}}%
-    \xa\ID@clear@fi\xa{\xa\@temp\xa}\ID@unspace
-    \xa\xa\xa\xa\xa\xa\xa\ID@clear@fi\xa\xa\xa\xa\xa\xa\xa{\xa\xa\xa
-      \@temp@a\xa\xa\xa{\xa\@temp@b\space}\
-    \def\next{\ID@toks\xa\xa\xa{\xa\the\xa\ID@toks\space}%
-      \xa\futurelet\xa\@foo\xa\ID@scandef\ID@unspace}% copied from ID@space
-  \fi
-  \ID@clear@fi{\futurelet\ID@makedef@finddef{#1}{#2#3}}\relax
-  \ID@fi
-}
-
-
-
-
-
-
-
-%
-% \begin{macros}{\ID@sd@checkagain,\ID@sd@lastcheck}
-% These just get the scandef loop started again and set |\@testtrue| if we're
-% still looking for stars and/or bangs.
-%    \begin{macrocode}
-\def\ID@sd@checkagain#1{\@testtrue\futurelet\@foo\ID@scandef}
-\def\ID@sd@lastcheck#1{\futurelet\@foo\ID@scandef}
 %    \end{macrocode}
 % \end{macros}
 %
-% \begin{macros}{\ID@saveprefix,\ID@abort,\ID@start}
-% These are the three macros called by |\ID@scandef| to either save the
-% prefix (|\long|, |\outer|, etc) to a token register, (attempt to) abort
-% the procedure in case of an error, or else get the definition started
-% once we find the |\edef| or |\xdef|.
+% \begin{macro}{\ID@makedef}
+% We define a number of ``define prefixes'', such as |\Inline| and
+% |\InlineSpecial|, and this functionality is factored out into
+% |\ID@makedef|.  It reads tokens looking for one of |\def|, |\gdef|,
+% |\newcommand|, |\renewcommand|, or |\providecommand|.  In the case
+% of the latter three, it looks for a following |*|, and for the
+% former, allows additional prefixes like |\global|, |\long|, or
+% |\outer|.  It then provides four arguments (the define command,
+% the macro name, the parameter list, and the definition block)
+% to the provided macro (the |#1| argument to |\ID@makedef|).
 %    \begin{macrocode}
-\newcommand*\ID@saveprefix[1]{%
-  \ID@toks\xa{\the\ID@toks#1}%
-  \futurelet\@foo\ID@scandef
+\def\ID@makedef#1{%
+  \begingroup
+    \ID@makedef@finddef{#1}{}%
 }
 %    \end{macrocode}
+% \end{macro}
+%
+% \begin{macro}{\ID@makedef@finddef}
+% The first stage of scanning a definition is to find the actual
+% definition token, e.g. |\def| or |\newcommand|.  Any groups
+% we find before encountering the definition command are
+% discarded (and will be an error if they contain other than
+% a single token).  We do a minimal amount of error checking:
+% (a) if we encounter a group, then something's gone wrong,
+% so try to recover; (b) if we see a good definition token,
+% then move on to the next step, |\ID@makedef@findcs|; (c)
+% if we see a blacklisted definition token then bail out;
+% (d) any other token is added to the list and we repeat.
+% \begin{params}
+%  * |#1| is the handler passed to |\ID@makedef|
+%  * |#2| is the tokens we've scanned so far
+%  * |#3| is the current token being scanned
+% \end{params
+%    \begin{macrocode}
+\def\ID@makedef@finddef#1#2#3{%
+  % (a) group
+  \ifcase\ID@is@group{#3}\ID@then
+    \PackageError{inlinedef}{No \protect\def-like token found.}\@ehd
+    \ID@abort
+  \fi
+  % (b) definition
+  \if\isID@def#3\ID@then
+    \ID@makedef@findcs{#1}{#2#3}%
+  \fi
+  % (c) blacklisted definition
+  \if\isID@baddef#3\ID@then
+    \PackageError{inlinedef}{Cannot use fully-expanding defines.}\@ehd
+    \ID@abort
+  \fi
+  % (d) default
+  \iftrue\ID@then
+    \ID@makedef@finddef{#1}{#2#3}%
+  \fi
+  \ID@esac
+}
+%    \end{macrocode}
+% \end{macro}
+%
+% \begin{macro}{\ID@makedef@findcs}
+% The second stage in scanning a definition is to find the
+% control sequence being defined.  This is very similar to
+% |\ID@makedef@finddef| in that (a) we expect non-groups.
+% We also handle a few special cases: (b) a |*| that should
+% be added onto the definition tokens (e.g. for |\newcommand|),
+% and (c) |\csname| which we expand immediately, since it's
+% more useful than trying to support overriding the definition
+% of |\csname| with whatever we're defining.  Otherwise
+% (d) we continue on to |\ID@makedef@findargs|.
+% \begin{params}
+%  * |#1| is the handler passed to |\ID@makedef|
+%  * |#2| is the definition command tokens
+%  * |#3| is the current token being scanned
+% \end{params
+%    \begin{macrocode}
+\def\ID@makedef@findcs#1#2#3{%
+  % (a) group
+  \ifcase\ID@is@group{#3}\ID@then
+    \PackageError{inlinedef}{Cannot define more than a single token: #3}\@ehd
+    \ID@abort
+  \fi
+  % (b) star
+  \if#3*\ID@then
+    \ID@makedef@findcs{#1}{#2#3}%
+  \fi
+  % (c) \csname
+  \ifx#3\csname\ID@then
+    \begingroup
+      \def\@temp{\ID@makedef@findcs{#1}{#2}}%
+      % 1st \@xa expands the \csname, 2nd \@xa expands \@temp before \endgroup
+      \@xa\@xa\@xa
+    \endgroup
+    \@xa\@temp\csname % replace the \csname we ate as #3
+  \fi
+  % (d) default case
+  \iftrue\IF@then
+    \ID@makedef@findargs{#1}{#2}{#3}%
+  \fi
+  \ID@esac
+}
+%    \end{macrocode}
+% \end{macro}
+%
+% \begin{macro}{\ID@makedef@findargs}
+% Once we have the control sequence being defined we just need to scoop
+% up any arguments, up until the open-brace.  We use a brace-delimited
+% parameter |#4| for this, adn then pass the result directly to the
+% handler (|#1|) to process.  This is actually a very simple macro.
+%    \begin{macrocode}
+\def\ID@makedef@findargs#1#2#3#4#{%
+  #1{#2}{#3}{#4}%
+}
+%    \end{macrocode}
+% \end{macro}
+%
+% \begin{macro}{\InlineSpecial,\ID@inlinespecial}
+% We define the |\InlineSpecial| user-facing command in terms of
+% |\ID@makedef| and |\ID@inlinespecial|.
+%    \begin{macrocode}
+\newcommand\InlineSpecial{\ID@makedef\ID@inlinespecial}
+%    \end{macrocode}
+% \end{macro}
+%
+% \begin{macro}{\ID@inlinespecial}
+% The |\ID@inlinespecial| macro does the actual work of defining
+% a special.  It takes the control sequence |#2| that the user
+% specified and defines a macro with a different, derived name
+% (|\csname ID@special@\string#2\endcsname|).  We also add |#2|
+% to the list of specials, so that they can be set up as quarks
+% when an |\Inline| definition is started.
+% \begin{params}
+%  * |#1| is the definition tokens (e.g. |\long\def|)
+%  * |#2| is the control sequence
+%  * |#3| is the argument tokens (e.g. |#1#2| or |[2]| for |\newcommand|)
+%  * |#4| is the actual definition
+% \end{params}
+%    \begin{macrocode}
+\long\def\ID@inlinespecial#1#2#3#4{%
+  \def\@temp{#1}% save in a macro so we can jump over it with \@xa
+  \@xa\@temp\csname ID@special@\string#2\endcsname#3{\begingroup#4\ID@END}%
+  \@xa\def\@xa\ID@quarks\@xa{\ID@quarks\def#2{#2}}%
+}
+%    \end{macrocode}
+% \end{macro}
+%
+% \begin{macro}{\Expand}
+% Here we define the |\Expand| special.  It's actually
+% a pretty simple definition, once we've defined all the
+% infrastructure.  We expand the parameter exactly once
+% (note that if it was a group, we will lose the grouping
+% braces) and then pass it along to |\Save| to store in
+% |\ID@toks|.
+%    \begin{macrocode}
+\InlineSpecial\newcommand\Expand[1]{\@xa\Save\@xa{#1}}
+%    \end{macrocode}
+% \end{macro}
+%
+% \begin{macro}{\NoExpand}
+% The |\NoExpand| special is even simpler.  Its entire
+% purpose is to ensure that a ``special'' token is not
+% actually treated as a special but is instead saved
+% directly, without expansion.
+%    \begin{macrocode}
+\InlineSpecial\newcommand*\NoExpand[1]{\Save{#1}}
+%    \end{macrocode}
+% \end{macro}
+%
+% \begin{macros}{\ExpandMulti}
+% The |\ExpandMulti| special simply recurses until
+% its first argument goes to zero.
+% \begin{params}
+%  * |#1| is the number of times yet to expand
+%  * |#2| is the tokens to expand
+% \end{params}
+%    \begin{macrocode}
+\InlineSpecial\newcommand\ExpandMulti[2]{%
+  \ifnum#1=\z@\ID@then
+    #2%
+  \fi
+  \iftrue\ID@then
+    \count@#1\relax
+    \advance\count@\m@ne
+    % 1st \@xa expands #2 once, 2nd \@xa expands \the\count@
+    \@xa\@xa\@xa\Continue
+    \@xa\@xa\@xa{%
+      \@xa\@xa\@xa\ExpandMulti
+      \@xa\@xa\@xa{\@xa\the\@xa\count@\@xa}\@xa{#2}}%
+  \fi
+  \ID@esac
+}
+%    \end{macrocode}
+% \end{macro}
+%
+% \begin{macro}{\ExpandFully}
+% Performing a full expansion simply involves passing a subset
+% of the definition to |\edef| and replacing the output.
+%    \begin{macrocode}
+\InlineSpecial\newcommand\ExpandFully[1]{%
+  \edef\@temp{#1}\@xa\Save\@xa{\@temp}%
+}
+%    \end{macrocode}
+% \end{macro}
+%
+% \begin{macro}{\ExpandUnsafe}
+% Unsafe expansion is even easier.  We just insert an |\@xa|
+% into the token stream, without consuming anything.
+%    \begin{macrocode}
+\InlineSpecial\newcommand\ExpandUnsafe{\@xa}
+%    \end{macrocode}
+% \end{macro}
+%
+% \begin{macro}{\Super}
+% The |\Super| special is a little more complicated, and only
+% works if the macro we're defining was already defined.  We
+% start by checking these preconditions, and then we expand
+% the stored previous definition.  We also implicitly include
+% the same parameters, though potentially we shouldn't?
+% Finally, because of the possibility for infinite loops, we
+% need to make sure to check the |ID@aborted| flag and bail
+% out if there's been a problem.
+%    \begin{macrocode}
+\InlineSpecial\newcommand\Super{%
+  \ID@checkusage\ID@checkredef{Super}%
+  \ifID@aborted\else
+    \@xa\@xa\@xa\Save\@xa\@xa\@xa{\@xa\ID@super\ID@fixedparams}%
+}
+%    \end{macrocode}
+% \end{macro}
+
+
+
+
+
+
+% \begin{macro}{\ID@abort}
 % In case the error was just the wrong type of |\def|, we consume up to and
 % including the first explicit group.
 %    \begin{macrocode}
 \newcommand\ID@abort{}\def\ID@abort#1#{\endgroup\@gobble}
 %    \end{macrocode}
-% To get the definition process started, we take |#1| as the definition
-% command to save (either |\def| or |\gdef|), |#2| as the command that
-% was provided (which we discard), |#3| is the name of the macro to define,
-% and |#4| is the parameter text, delimited by a begin-group character.
-%    \begin{macrocode}
-\newcommand\ID@start{}\def\ID@start#1#2#3#4#{%
-  \xa\def\xa\ID@prefix\xa{\the\ID@toks#1}%
-  \ID@def#3{#4}%
-}
-%    \end{macrocode}
-% \end{macros}
+% \end{macro}
 %
-% \begin{macros}{\ID@fixparams,\ID@fp@start}
+% \begin{macros}{\ID@fixparams,\ID@fixparams@start}
 % In order for |\Super| to work properly, we need to fix the parameter
 % list to put the |#1| in braces, since it actually consists of two tokens.
-% Therefore, |\ID@fixparams| takes everything between it and |\Q@END|
-% and puts it in |\toks@fixedparams|.  If it finds a |#|, then it checks
-% whether the argument is delimited or not, and if not, it inserts
-% a pair of braces.  We currently define these with |\newcommand*|, though
-% if there were a reason we could conceivably make them |\long|.
-% Update: we now use |\ID@toks| and then define |\ID@fixedparams| from there.
+% Therefore, |\ID@fixparams| takes everything between it and |\ID@END|
+% and puts it in |\ID@toks|, which is ultimately saved into
+% |\ID@fixedparams|.  If it finds a |#|, then wraps the whole thing into
+% a group, since it's apparently safe regardless of whether the argument
+% is delimited or not.
 %    \begin{macrocode}
-\newcommand*\ID@fixparams{\begingroup\ID@toks{}\futurelet\@foo\ID@fp@start}
-\newcommand*\ID@fp@start{%
-  \let\next\ID@fp@normal
-  \ifx\@foo\Q@END\let\next\ID@fp@end\fi
- \ifcat\noexpand\@foo##\let\next\ID@fp@param\fi % was \ifx\@foo - broken?
-  \ifcat\noexpand\@foo\space
-    \def\next{\ID@toks\xa\xa\xa{\xa\the\xa\ID@toks\space}%
-      \xa\futurelet\xa\@foo\xa\ID@fp@start\ID@unspace}% copied from ID@space
+\def\ID@fixparams{%
+  \begingroup
+    \ID@toks{}%
+    \futurelet\token\ID@fixparams@start
+}
+\def\ID@fixparams@start{%
+  % (a) end of parameter list
+  \ifx\token\ID@END\ID@then
+    \ID@fixparams@end
   \fi
-  \next
+  % (b) parameter
+  \ifcat\noexpand\token##\ID@then
+    \ID@fixparams@param
+  \fi
+  % (c) space needs to be preserved
+  \ifcat\noexpand\token\space\ID@then
+    % This is copied from \ID@space
+    \ID@toks\@xa\@xa\@xa{\@xa\the\@xa\ID@toks\space}%
+    \@xa\futurelet\@xa\token\@xa\ID@fixparams@start\ID@unspace}%
+  \fi
+  % (d) default
+  \iftrue\ID@then
+    \ID@fixparams@normal
+  \fi
+  \ID@esac
 }
 %    \end{macrocode}
 % \end{macros}
 %
-% \begin{macros}{\ID@fp@normal,\ID@fp@param,\ID@fp@end}
+% \begin{macros}{\ID@fixparams@normal,\ID@fixparams@param,\ID@fixparams@end}
 % These are the two commands that |\ID@fixparams| calls to actually
 % consume each token, depending on whether it was a parameter.
 %    \begin{macrocode}
-\newcommand*\ID@fp@normal[1]{%
-  \ID@toks\xa{\the\ID@toks#1}\futurelet\@foo\ID@fp@start
+\def\ID@fixparams@normal#1{%
+  \ID@toks\@xa{\the\ID@toks#1}\futurelet\token\ID@fixparams@start
 }
-\newcommand*\ID@fp@param[2]{%
-  % We used to just use ###2 but need two more now...
-  % Need another doubling because we're now using it inside a def...
-  \def\@arg{#########2}% assume delimited unless we find # or \Q@END
-  \ifcat\noexpand\@foo##\def\@arg{{#########2}}\fi
-  \ifx\@foo\Q@END\def\@arg{{#########2}}\fi
-  \ID@toks\xa\xa\xa{\xa\the\xa\ID@toks\@arg}%
-  \futurelet\@foo\ID@fp@start
+\def\ID@fixparams@param#1#2{%
+  \def\@temp{\ID@toks\@xa{\the\ID@toks{#########2}}}\@temp
+  \futurelet\token\ID@fixparams@start
 }
-\newcommand*\ID@fp@end[1]{%
-  \xa\endgroup\xa\def\xa\ID@fixedparams\xa{\the\ID@toks}%
+\newcommand*\ID@fixparams@end[1]{%
+  \@xa\endgroup\@xa\def\@xa\ID@fixedparams\@xa{\the\ID@toks}%
 }
 %    \end{macrocode}
 % This should deal with everything \emph{except} a single |#|,
@@ -607,55 +806,15 @@
 % then we end up with an extra |{}| on the input stream.  I can't actually
 % figure out how to test if this has happened in |...@insertp|, anyway.
 % \end{macros}
-%
-% \begin{macros}{\ID@def}
-% Here is where the ``main loop'' is initiated.  We start by
-% pretending to allocate another token register (though we actually
-% just |\toksdef| it), and then define a number of quarks which we
-% use as delimiters for various purposes.  Finally, we start scanning.
-% Afterwards, we test if there was an error and if not, we expand the
-% definition command \emph{after} the |\endgroup| so that we can clean
-% up all the local variables.
-%    \begin{macrocode}
-\newcommand\ID@def[3]{%
-  % Other definitions
-  \global\ID@abortedfalse
-  \let\@reservedc#1%
-  \def\@macroname{#1}% for error message
-  \ID@fixparams#2\Q@END
-  % These are used by \Super but easier to define here
-  \def\@reservedb#2{}%
-  \edef\@reservedb{\xa\ID@getprefix\meaning\@reservedb\Q@END}%
-  \ifx#1\undefined % hopefully nobody's going around defining \undefined
-    \let\@reserveda\undefined
-  \else
-    \edef\@reserveda{\xa\ID@getprefix\meaning#1\Q@END}%
-  \fi
-  % Scan it all into \ID@toks
-  \ifID@bang\else\ID@checkusage\fi
-  \ifID@aborted\else    
-    \ID@toks{}\ID@scan#3\Q@END{}% we need the {} so that the the #1# works...
-  \fi
-  \ifID@aborted
-    \def\command{}% gracefully ignore
-  \else
-    \let#1\relax % don't want it expanded in the |\edef| below
-    % We don't need to worry about scope anymore
-    \toks0\ID@toks % likely redundant, but what if ID@toks=1 or 2?
-    \toks1\xa{\ID@prefix}% (easiest way to avoid expansion...)
-    \toks2{#2}%
-    \edef\command{\the\toks1#1\the\toks2{\the\toks0}}%
-    % We could also write this with 3 levels of \xa...
-  \fi
-  \global\ID@toks\xa{\ID@fixedparams}% just to test...
-  \expandafter\endgroup\command
-}
-%    \end{macrocode}
-% \end{macros}
+
+
+  % was \ID@define
+
+
 %
 % \begin{macros}{\ID@scan,\ID@switch}
 % This is the main loop.  We look at each token in turn and deal with it,
-% mostly by inserting it into |\ID@toks|.  If it's a |\Q@END| then we're done.
+% mostly by inserting it into |\ID@toks|.  If it's a |\ID@END| then we're done.
 % If it's |\Super| or |\Expand| then we need to do something special.
 % If it's a space, then we need to add the space to
 % |\ID@toks|.  Finally, if it's a |\bgroup| then we need to figure out whether
@@ -666,10 +825,10 @@
 \newcommand\ID@scan{\futurelet\@foo\ID@switch}
 \newcommand\ID@switch{%
   \let\next\ID@normal
-  \ifx\@foo\Q@END
+  \ifx\@foo\ID@END
     \let\next\@gobble
   \fi
-  \ifx\@foo\@reservedc % macro name... what to do?
+  \ifx\@foo\ID@super % macro name... what to do?
     \ifID@star
       \ifID@starstar
         \let\next\ID@expandmacro
@@ -694,7 +853,7 @@
     \let\next\ID@noexpandnext
   \fi
   \ifx\@foo\Recurse
-    \def\next{\xa\xa\xa\ID@scan\xa\xa\xa\NoExpand\xa\@macroname\@gobble}%
+    \def\next{\@xa\@xa\@xa\ID@scan\@xa\@xa\@xa\NoExpand\@xa\@macroname\@gobble}%
   \fi
   \ifcat\noexpand\@foo\space
     \let\next\ID@space
@@ -718,11 +877,11 @@
 % gobbled up by the lexer after reading the control sequence name.
 %    \begin{macrocode}
 \newcommand\ID@space{%
-  \ID@toks\xa\xa\xa{\xa\the\xa\ID@toks\space}%
-  \xa\ID@scan\ID@unspace
+  \ID@toks\@xa\@xa\@xa{\@xa\the\@xa\ID@toks\space}%
+  \@xa\ID@scan\ID@unspace
 }
 \newcommand\ID@unspace{}
-\xa\def\xa\ID@unspace\space{}
+\@xa\def\@xa\ID@unspace\space{}
 %    \end{macrocode}
 % \end{macros}
 %
@@ -735,12 +894,12 @@
 % with |\@empty| to see if anything comes before the next |{}|.  If it
 % doesn't find anything then it was an explicit group and we recurse.
 % One consequence of this is that we always need to put a |{}| after
-% |\Q@END| so that we don't get an error here.
+% |\ID@END| so that we don't get an error here.
 %    \begin{macrocode}
 \newcommand\ID@trygroup{}
 \long\def\ID@trygroup#1#{% check for explicit/implicit grouping!
   \def\@reservedd{#1}%
-  \xa\let\xa\next
+  \@xa\let\@xa\next
     \ifx\@reservedd\@empty\ID@recurse\else\ID@normal\fi
   \next#1%
 }
@@ -756,9 +915,9 @@
 %    \begin{macrocode}
 \newcommand\ID@recurse[1]{%
   \begingroup\ID@toks{}% start a new level of grouping and empty \ID@toks
-  \ID@scan#1\Q@END{}% % parse...
-  \xa\endgroup\xa    % this fiasco should get the job done...!
-  \ID@toks\xa\xa\xa{\xa\the\xa\ID@toks\xa{\the\ID@toks}}%
+  \ID@scan#1\ID@END{}% % parse...
+  \@xa\endgroup\@xa    % this fiasco should get the job done...!
+  \ID@toks\@xa\@xa\@xa{\@xa\the\@xa\ID@toks\@xa{\the\ID@toks}}%
   \ID@scan
 }
 %    \end{macrocode}
@@ -767,8 +926,8 @@
 % \begin{macros}{\ID@normal,ID@noexpandnext}
 % This is what we do when it's not anything special.
 %    \begin{macrocode}
-\newcommand\ID@normal[1]{\ID@toks\xa{\the\ID@toks#1}\ID@scan}
-\newcommand\ID@noexpandnext[2]{\ID@toks\xa{\the\ID@toks#2}\ID@scan}
+\newcommand\ID@normal[1]{\ID@toks\@xa{\the\ID@toks#1}\ID@scan}
+\newcommand\ID@noexpandnext[2]{\ID@toks\@xa{\the\ID@toks#2}\ID@scan}
 %    \end{macrocode}
 % \end{macros}
 %
@@ -831,8 +990,8 @@
 \newcommand*\ID@expandsuper[1]{%
   \ID@checkusage\ID@checkredef
   \ifID@aborted\else
-    \ID@toks\xa\xa\xa\xa\xa\xa\xa
-      {\xa\xa\xa\the\xa\xa\xa\ID@toks\xa\@reservedc\ID@fixedparams}%
+    \ID@toks\@xa\@xa\@xa\@xa\@xa\@xa\@xa
+      {\@xa\@xa\@xa\the\@xa\@xa\@xa\ID@toks\@xa\ID@super\ID@fixedparams}%
   \fi
   \ID@scan
 }
@@ -841,10 +1000,10 @@
 
 \def\DefineInlineCommand#1#2#{\ID@defineinline#1{#2}}
 \def\ID@defineinline#1#2#3{%
-  \xa\def\xa\@temp\xa{\csname ID@\string#1\endcsname}%
-  \xa\ifx\@temp\relax\else\PackageError{inlinedef}{redefinition}\fi
-  \xa\def\csname ID@\string#1\endcsname#2{\begingroup#3\C@END}%
-  \xa\def\xa\ID@quarks\xa{\ID@quarks#1}%
+  \@xa\def\@xa\@temp\@xa{\csname ID@\string#1\endcsname}%
+  \@xa\ifx\@temp\relax\else\PackageError{inlinedef}{redefinition}\fi
+  \@xa\def\csname ID@\string#1\endcsname#2{\begingroup#3\ID@END}%
+  \@xa\def\@xa\ID@quarks\@xa{\ID@quarks#1}%
 }
 
 
@@ -860,7 +1019,7 @@
 \def\@ID@new#1#2#3#{\@@ID@new{#1}{#2}{#3}}
 \def\@@ID@new#1#2#3#4{
   \ID@checkdefined{#1}{#2}%
-  \xa\newcommand\csname ID@\string#2\endcsname#3{%
+  \@xa\newcommand\csname ID@\string#2\endcsname#3{%
     \begingroup\Continue{#4}\C#END}}
 
 
@@ -869,18 +1028,18 @@
 
 
 \DefineInlineCommand\Super{%
-  \ID@checkusage\ID@checkreder{Super}%
+  \ID@checkusage\ID@checkredef{Super}%
   \ifID@aborted\else
-    \xa\xa\xa\Save\xa\xa\xa{\xa\@reservedc\ID@fixedparams}%
+    \@xa\@xa\@xa\Save\@xa\@xa\@xa{\@xa\ID@super\ID@fixedparams}%
 }
 
 
 \newcommand\ID@expandnext[2]{%
-  \ID@toks\xa\xa\xa{\xa\the\xa\ID@toks#2}\ID@scan
+  \ID@toks\@xa\@xa\@xa{\@xa\the\@xa\ID@toks#2}\ID@scan
 }
 
 \DefineInlineCommand\Expand#1{%
-  \xa\Save\xa{#1}%
+  \@xa\Save\@xa{#1}%
 }
 
 
@@ -890,20 +1049,28 @@
     \ID@toks{#3}%
     \@testtrue\ifnum\ID@count<\@ne\@testfalse\fi
     \@whilesw\if@test\fi{%
-      \ID@toks\xa\xa\xa{\the\ID@toks}% one expansion...
+      \ID@toks\@xa\@xa\@xa{\the\ID@toks}% one expansion...
       \advance\ID@count\m@ne\ifnum\ID@count<\@ne\@testfalse\fi
     }%
-  \xa\endgroup\xa\ID@toks\xa\xa\xa{\xa\the\xa\ID@toks\the\ID@toks}\ID@scan
+  % The 1st \@xa expands the 2nd \the\ID@toks
+  \@xa\endgroup
+  % The 2nd \@xa starts after the \endgroup and expands the 1st \the\ID@toks
+  \@xa\ID@toks\@xa\@xa\@xa
+      {\@xa\the\@xa\ID@toks\the\ID@toks}%
+  \ID@scan
 }
 
 \DefineInlineCommand\ExpandMulti#1#2{%
   \ifnum#1>\@ne
   \count@#1\relax
   \advance#1\m@ne
-  \xa\xa\xa\Continue\xa\xa\xa{\xa\xa\xa\ExpandMulti\xa\xa\xa{\xa\the\xa\count@\xa}\xa{#2}}%
+  % 1st \@xa: expand the first token of #2, 2nd \@xa: expand \the\count@
+  \@xa\@xa\@xa\Continue
+  \@xa\@xa\@xa{\@xa\@xa\@xa\ExpandMulti
+    \@xa\@xa\@xa{\@xa\the\@xa\count@\@xa}\@xa{#2}}%
 }
 
-\DefineInlineCommand\ExpandFully#1{\edef\@temp{#1}\xa\Save\xa{\@temp}}
+\DefineInlineCommand\ExpandFully#1{\edef\@temp{#1}\@xa\Save\@xa{\@temp}}
 
 \DefineInlineCommand\ExpandUnsafe{\expandafter}
 
@@ -916,15 +1083,15 @@
 \Inline\newcommand... - could this work?
 
 
-\newcommand*\ID@expandunsafe[1]{\expandafter\ID@scan}
-\newcommand*\ID@expandmacro[1]{\expandafter\ID@scan\@reservedc}
+\def\ID@expandunsafe#1{\expandafter\ID@scan}
+\def\ID@expandmacro#1{\expandafter\ID@scan\ID@super}
 %    \end{macrocode}
 % \end{macros}
 %
 % \begin{macros}{\ID@getprefix}
 % This is used to compare argument lists.
 %    \begin{macrocode}
-\newcommand\ID@getprefix{}\long\def\ID@getprefix#1:#2->#3\Q@END{\detokenize{#2}}
+\long\def\ID@getprefix#1:#2->#3\ID@END{\detokenize{#2}}
 %    \end{macrocode}
 % \end{macros}
 %
@@ -943,17 +1110,19 @@
 % First we define a few helper-functions to test for errors, etc.
 %    \begin{macrocode}
 %<*testsuite>
+\documentclass{minimal}
+\usepackage{inlinedef}
 \makeatletter
 \errorcontextlines=10
 \def\WantError#1#2#3{%
   \let\WE@packageerror\PackageError
   \def\PackageError##1##2##3{%
     \protected@edef\@goterror{##2}\protected@edef\@wanterror{#2}%
-    \edef\@goterror{\xa\detokenize\xa{\@goterror}}%
-    \edef\@wanterror{\xa\detokenize\xa{\@wanterror}}%
+    \edef\@goterror{\@xa\detokenize\@xa{\@goterror}}%
+    \edef\@wanterror{\@xa\detokenize\@xa{\@wanterror}}%
     \protected@edef\@gotpackage{##1}\protected@edef\@wantpackage{#1}%
-    \edef\@gotpackage{\xa\detokenize\xa{\@gotpackage}}%
-    \edef\@wantpackage{\xa\detokenize\xa{\@wantpackage}}%
+    \edef\@gotpackage{\@xa\detokenize\@xa{\@gotpackage}}%
+    \edef\@wantpackage{\@xa\detokenize\@xa{\@wantpackage}}%
     \global\let\PackageError\WE@packageerror
     \@tempswafalse
     \ifx\@gotpackage\@wantpackage\else\message{^^J(arg 1 differs)^^J}\@tempswatrue\fi
@@ -1063,12 +1232,12 @@
 \Inline\outer\def\a{f}
 \edef\a{\meaning\a}
 \edef\b{\detokenize{\outer macro:->f}}
-\xa\CheckDefinition\xa\a\xa{\b}
+\@xa\CheckDefinition\@xa\a\@xa{\b}
 
 \Inline\long\outer\def\a{g}
 \edef\a{\meaning\a}
 \edef\b{\string\long\string\outer\space\detokenize{macro:->g}}
-\xa\CheckDefinition\xa\a\xa{\b}
+\@xa\CheckDefinition\@xa\a\@xa{\b}
 
 \def\a{g}
 \Inline!\long\def\a#1{h}
@@ -1116,8 +1285,8 @@
  %\edef\xx{\expandafter\string\x}
  %\show\xx
  %%% idea: \Expand\iffoo
- %%%   - use same trick as \newif (i.e. \xa\def\@if#1{true}{...}
- %%%     where \@if#1#2 -> \csname\xa\if@\string#1#2\endcsname.
+ %%%   - use same trick as \newif (i.e. \@xa\def\@if#1{true}{...}
+ %%%     where \@if#1#2 -> \csname\@xa\if@\string#1#2\endcsname.
  %%%           \if@ if -> .
  %%%   - optionally remove the if (or maybe use futurelets to pick off
  %%%     one at a time -> \ID@is@an@if#1
@@ -1125,7 +1294,7 @@
  %%%     gather everything into token register until we find a BALANCED
  %%%     \else and/or \fi.  The balanced part is tricky... and then we
  %%%     end up with weird behavior because the \fi is already gobbled
- %%%     when it wouldn't normally be, so attempts to \xa it will be
+ %%%     when it wouldn't normally be, so attempts to \@xa it will be
  %%%     surprising.
  %%% instead:
  %%%   \ExpandIf{foo}{...}?\Else{...}?
@@ -1261,7 +1430,7 @@
 \CheckDefinition\a{a b c d e}
 
 \Inline\def\a{a\NoExpand{\Expand\x\Expand\y} b}
-\xa\CheckDefinition\xa\a\xa{\xa a\xa\Expand\xa\x\xa\Expand\xa\y\space b}
+\@xa\CheckDefinition\@xa\a\@xa{\@xa a\@xa\Expand\@xa\x\@xa\Expand\@xa\y\space b}
 
  %    B. Grouping
 \def\a{b{c d}e}
@@ -1277,6 +1446,33 @@
 \Inline\def\a#1bcd#2{a\Super b}
 \CheckDefinition\a#1bcd#2{a[#1...#2]b}
 
+\iffalse -- this infinite loops
+   -- to fix, need to \ensurefixedparams and then add {\ID@XXX} at end (always?)
+   -- can't distinguish \bgroup from {\bgroup}, but shouldn't matter...
+   -- actually we can, with #1#
+   -- but we do need to worry about wrapping the last delimited arg before a #!
+   -- so we really do need to be careful about that
+
+   -- would be nice to just not fill in the params, though this
+   -- makes it a little harder to expand...
+   -- would be nice to have an \ExpandAfter
+   -- TODO - replace quarks with sets --> better scoping?
+           - just use the special's name as-is... - already needs a \detokenize?
+
+   -- add a quick KI check for  #1{->#2{#3\END against  \meaning#1{->{x\END
+      or something like that - what if meaning has a { in it already? etc
+        -- will need to temporarily change { catcode
+        -- how to get last token in list?!? delimit -> and see if last is {
+           reverse token list is not too hard...
+http://tex.stackexchange.com/questions/36034/most-efficient-way-to-reverse-a-token-list-tail-recursion
+
+
+
+\def\a#1bcd#2#{[#1...#2]}
+\Inline\def\a#1bcd#2#{a\Super b}
+\CheckDefinition\a#1bcd#2{a[#1...#2]b}
+\fi
+
 \def\a#1\##2{y}
 \Inline\def\a#1\##2{x\UnsafeExpand\a{#1}\#{#2}z}
 \CheckDefinition\a#1\##2{xyz}
@@ -1290,9 +1486,9 @@
 \Inline\def\a#1 {x\Super z}
 \CheckDefinition\a#1 {xyz}
 
-\xa\def\xa\a\space{y}
-\xa\Inline\xa\def\xa\a\space{x\Super z}
-\xa\CheckDefinition\xa\a\space{xyz}
+\@xa\def\@xa\a\space{y}
+\@xa\Inline\@xa\def\@xa\a\space{x\Super z}
+\@xa\CheckDefinition\@xa\a\space{xyz}
 
  %      ii. funky catcodes
  %%%% This test fails.
@@ -1479,3 +1675,20 @@
 %%   Grave accent  \`     Left brace    \{     Vertical bar  \|
 %%   Right brace   \}     Tilde         \~}
 %%
+
+
+
+
+ %%%%% TODO - do we need this?
+
+ %% \ifx\detokenize\ID@UNDEFINED
+ %%   \def\ID@empty#1{%
+ %%     \begingroup\def\@temp{#1}\expandafter\endgroup
+ %%     \csname @\ifx\@temp\@empty first\else second\fi oftwo\endcsname
+ %%   }
+ %% \else
+ %%   % eTeX version using detokenize
+ %%   \def\ID@empty#1{%
+ %%     \csname @\if\relax\detokenize#1\relax first\else second\fi oftwo\endcsname
+ %%   }
+ %% \fi
